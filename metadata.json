@@ -1,0 +1,7 @@
+{
+  "name": "Remix [working] TEM/SEM Image Analysis Tool best",
+  "description": "An intelligent application for nanomaterials researchers to analyze TEM/SEM images. It offers AI-powered analysis of nanoparticle size, shape, and surface morphology, with interactive assistance and detailed reporting.",
+  "requestFramePermissions": [],
+  "prompt": "",
+  "majorCapabilities": []
+}
