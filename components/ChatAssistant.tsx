@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { ChatMessage } from '../types';
 import { streamChatResponse } from '../services/geminiService';
 import { SendIcon, UserIcon, RobotIcon } from './icons';
-import { marked } from 'marked';
+import { ScientificMarkdownRenderer } from './ScientificMarkdownRenderer';
 
 interface ChatAssistantProps {
   chatHistory: ChatMessage[];
@@ -54,11 +54,6 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ chatHistory, setChatHisto
     }
   };
 
-  const parseMarkdown = (text: string) => {
-    const rawMarkup = marked.parse(text, { breaks: true, gfm: true });
-    return { __html: rawMarkup as string };
-  };
-
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-lg flex flex-col h-[40rem]">
       <div ref={chatContainerRef} className="flex-grow p-4 space-y-4 overflow-y-auto">
@@ -66,7 +61,7 @@ const ChatAssistant: React.FC<ChatAssistantProps> = ({ chatHistory, setChatHisto
           <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
             {msg.role === 'model' && <RobotIcon className="w-8 h-8 flex-shrink-0 text-cyan-400 mt-1" />}
             <div className={`max-w-md p-3 rounded-lg ${msg.role === 'user' ? 'bg-cyan-800 text-white' : 'bg-gray-700 text-gray-200'}`}>
-               <div className="prose prose-sm prose-invert" dangerouslySetInnerHTML={parseMarkdown(msg.content)} />
+               <ScientificMarkdownRenderer content={msg.content} />
                {isLoading && msg.role === 'model' && index === chatHistory.length - 1 && <span className="inline-block w-2 h-2 ml-2 bg-white rounded-full animate-pulse"></span>}
             </div>
             {msg.role === 'user' && <UserIcon className="w-8 h-8 flex-shrink-0 text-cyan-400 mt-1" />}

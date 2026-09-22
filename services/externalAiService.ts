@@ -6,6 +6,7 @@ import {
   Measurement, 
   AIServiceConfig 
 } from '../types';
+import { searchOpenScholarlyRepositories } from './academicSearchService';
 
 /**
  * Universal client for OpenAI-compatible APIs (OpenAI, OpenRouter, Groq, Together, DeepSeek, Custom v1)
@@ -244,6 +245,10 @@ Parameters:
 - Nanomaterial: ${params.nanoparticleName || 'Nanomaterial'}
 - Category: ${params.materialType || 'N/A'}
 - Synthesis Method: ${params.synthesisMethod || 'N/A'}
+- Precursors: ${params.startingMaterials?.join(', ') || 'N/A'}
+- Reducing / Stabilizing Agent: ${params.reducingStabilizingAgent || 'None specified'}
+- Extraction Protocol: ${params.extractionMethod || 'N/A'}
+- Biomass Organ / Plant Part: ${params.plantPart || 'N/A'}
 - Crystal Structure (XRD): ${params.crystalStructure || 'N/A'}
 - EDX Elemental Composition: ${params.edxData || 'N/A'}
 - Detector: ${params.detector}, Vacuum: ${params.vacuum}
@@ -251,6 +256,7 @@ Parameters:
 - Manual Measurements Count: ${measurements.length}
 ${manualStats ? `- Calibrated Mean Size: ${manualStats.mean.toFixed(2)} nm, Std Dev: ±${manualStats.stdDev.toFixed(2)} nm` : ''}
 ${isComparative ? '- COMPARATIVE STUDY: Compare current spent/after-use state with pristine baseline image provided.' : ''}
+${params.reducingStabilizingAgent ? '- BIO-SYNTHESIS & CAPPING: Analyze how the reducing/stabilizing agent or plant phytochemicals reduced precursors and stabilized facets to dictate the observed particle size and morphology.' : ''}
 
 Output ONLY valid JSON matching this schema:
 {
@@ -370,6 +376,16 @@ export async function externalPerformLiteratureReview(
   config: AIServiceConfig,
   query: string
 ): Promise<LiteratureItem[]> {
+  // First attempt live network search from open scholarly repositories (OpenAlex / CrossRef)
+  try {
+    const livePapers = await searchOpenScholarlyRepositories(query, 5);
+    if (livePapers && livePapers.length > 0) {
+      return livePapers;
+    }
+  } catch (netErr) {
+    console.warn("Live academic network search failed, falling back to LLM completion...", netErr);
+  }
+
   const prompt = `You are a materials science librarian. Provide 3-5 real or benchmark scholarly papers for: "${query}".
 Return ONLY a valid JSON array of objects with schema:
 [
@@ -386,40 +402,45 @@ Return ONLY a valid JSON array of objects with schema:
 ]`;
 
   let raw = '';
-  if (config.provider === 'claude') {
-    raw = await callClaudeApi(
-      config.claudeApiKey!,
-      config.claudeModel || 'claude-3-5-sonnet-20241022',
-      'Return ONLY a valid JSON array.',
-      [{ role: 'user', content: prompt }]
-    );
-  } else {
-    let endpoint = 'https://api.openai.com/v1';
-    let apiKey = config.openaiApiKey || '';
-    let model = config.openaiModel || 'gpt-4o';
-    const extraHeaders: Record<string, string> = {};
+  try {
+    if (config.provider === 'claude') {
+      raw = await callClaudeApi(
+        config.claudeApiKey!,
+        config.claudeModel || 'claude-3-5-sonnet-20241022',
+        'Return ONLY a valid JSON array.',
+        [{ role: 'user', content: prompt }]
+      );
+    } else {
+      let endpoint = 'https://api.openai.com/v1';
+      let apiKey = config.openaiApiKey || '';
+      let model = config.openaiModel || 'gpt-4o';
+      const extraHeaders: Record<string, string> = {};
 
-    if (config.provider === 'openrouter') {
-      endpoint = 'https://openrouter.ai/api/v1';
-      apiKey = config.openrouterApiKey || '';
-      model = config.openrouterModel || 'openai/gpt-4o';
-      extraHeaders['HTTP-Referer'] = window.location.origin;
-    } else if (config.provider === 'custom') {
-      endpoint = config.customBaseUrl || 'https://api.openai.com/v1';
-      apiKey = config.customApiKey || '';
-      model = config.customModel || 'gpt-4o';
+      if (config.provider === 'openrouter') {
+        endpoint = 'https://openrouter.ai/api/v1';
+        apiKey = config.openrouterApiKey || '';
+        model = config.openrouterModel || 'openai/gpt-4o';
+        extraHeaders['HTTP-Referer'] = window.location.origin;
+      } else if (config.provider === 'custom') {
+        endpoint = config.customBaseUrl || 'https://api.openai.com/v1';
+        apiKey = config.customApiKey || '';
+        model = config.customModel || 'gpt-4o';
+      }
+
+      raw = await callOpenAICompatible(
+        endpoint,
+        apiKey,
+        model,
+        [{ role: 'user', content: prompt }],
+        extraHeaders
+      );
     }
 
-    raw = await callOpenAICompatible(
-      endpoint,
-      apiKey,
-      model,
-      [{ role: 'user', content: prompt }],
-      extraHeaders
-    );
+    return parseJsonSafely<LiteratureItem[]>(raw, []);
+  } catch (llmErr) {
+    console.error("LLM literature review error:", llmErr);
+    return [];
   }
-
-  return parseJsonSafely<LiteratureItem[]>(raw, []);
 }
 
 /**
@@ -429,20 +450,52 @@ export async function externalGenerateFinalSynthesis(
   config: AIServiceConfig,
   report: AnalysisReportData,
   params: AnalysisParams,
-  literature: LiteratureItem[]
+  literature: LiteratureItem[],
+  manualStats?: { count: number; mean: number; stdDev: number; min: number; max: number } | null
 ): Promise<string> {
-  const prompt = `TASK: GENERATE FINAL MANUSCRIPT-READY INTEGRATED INTERPRETATION.
+  const visualMorphology = params.microscopyType === 'SEM'
+    ? (report.semAnalysis.morphology || 'N/A')
+    : (report.temAnalysis.shapeAnalysis || 'N/A');
+  const visualGeometry = report.temAnalysis.geometryDetails || 'N/A';
+  const caliperStatsStr = manualStats
+    ? `Calibrated caliper dataset: N=${manualStats.count}, Mean = ${manualStats.mean.toFixed(2)} nm, StdDev = ±${manualStats.stdDev.toFixed(2)} nm`
+    : `Estimated Mean = ${report.temAnalysis.averageSizeNm || 'N/A'} nm`;
+
+  const prompt = `TASK: GENERATE FINAL MANUSCRIPT-READY INTEGRATED MATERIALS SCIENCE INTERPRETATION.
 Sample: ${params.nanoparticleName || 'Nanomaterial'}, Instrument: ${params.microscopyType}.
-XRD Phase: ${params.crystalStructure || 'N/A'}, Precursors: ${params.startingMaterials?.join(', ') || 'N/A'}, EDX: ${params.edxData || 'N/A'}.
-Lifecycle Stage: ${params.imageStage || 'not_specified'} (${params.imageStageDetails || 'None'}).
-Measured Average Size: ${report.temAnalysis.averageSizeNm || 'N/A'} nm.
-Literature references: ${literature.map((l, i) => `[${i+1}] ${l.title} (${l.year})`).join('; ')}.
+1. EXACT VISION MODEL OBSERVATIONS:
+- Morphology / Shape: ${visualMorphology}
+- Geometry & Facets: ${visualGeometry}
+- Contrast / Surface Texture: ${report.temAnalysis.topographyDetails || report.semAnalysis.surfaceRoughness || 'N/A'}
+- Aggregation State: ${report.aggregation}
+- Particle Dimensions: ${caliperStatsStr}
+- Vision Context: ${report.contextualInterpretation}
+- Spent / Lifecycle Analysis: ${report.comparisonAnalysis || 'N/A'}
+
+2. SYNTHESIS & PRECURSORS:
+- Synthesis Route: ${params.synthesisMethod || 'Standard synthesis'}
+- Precursor Starting Materials: ${params.startingMaterials?.join(', ') || 'N/A'}
+- Reducing / Stabilizing Agent: ${params.reducingStabilizingAgent || 'None specified'}
+- Extraction Protocol: ${params.extractionMethod || 'N/A'}
+- Plant Biomass Organ: ${params.plantPart || 'N/A'}
+
+3. CRYSTALLOGRAPHY & EDX:
+- XRD Crystal Structure / Phase: ${params.crystalStructure || 'N/A'}
+- EDX Composition: ${params.edxData || 'N/A'}
+- Lifecycle Stage: ${params.imageStage || 'not_specified'}
+
+4. GROUNDED LITERATURE TO CITE:
+${literature.map((l, i) => `[${i+1}] ${l.authors || 'Authors'} (${l.year}). "${l.title}". ${l.journal || ''}. Key Findings: ${l.keyFindings}. DOI: ${l.doi || l.url}`).join('\n')}
 
 INSTRUCTIONS:
 1. Write a publication-grade Materials Science Results and Discussion section (1000+ words).
-2. Integrate crystal facets, morphology, synthesis mechanisms, and stage differences.
-3. Use IEEE style citations [1], [2] referencing the provided literature.
-4. Return high-level markdown text only.`;
+2. Use active IEEE style citations [1], [2], referencing every provided paper.
+3. Integrate crystal facets, morphology, synthesis mechanisms, and stage differences.
+4. If a plant extract or reducing agent is provided (${params.reducingStabilizingAgent || 'N/A'} via ${params.extractionMethod || 'N/A'}), weave a coherent scientific narrative explaining how specific classes of phytochemicals (polyphenols, flavonoids, tannins) reduced metal precursors, passivated crystal planes, and governed particle size distribution.
+5. FORMATTING: Format chemical reaction equations in clean LaTeX display blocks:
+   $$ \\text{R-OH (Polyphenol)} + \\text{Ag}^+ \\longrightarrow \\text{R=O (Quinone intermediate)} + \\text{Ag}^0 + \\text{H}^+ $$
+   and use inline math for ions and crystal planes: $ \\text{Ag}^+ $, $ (111) $, $ (200) $.
+6. Return high-level markdown text only.`;
 
   if (config.provider === 'claude') {
     return callClaudeApi(

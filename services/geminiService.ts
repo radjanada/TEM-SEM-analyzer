@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type, Chat } from "@google/genai";
 import { AnalysisParams, AnalysisReportData, ChatMessage, Scale, Measurement, LiteratureItem } from '../types';
 import { loadAIServiceConfig } from './aiConfig';
+import { searchOpenScholarlyRepositories } from './academicSearchService';
 import { 
   ollamaGetAutoFillSuggestions, 
   ollamaPerformFullAnalysis, 
@@ -194,6 +195,10 @@ export const performFullAnalysis = async (
       Analyze this ${params.microscopyType} image for Sample: ${params.nanoparticleName || 'Unnamed'}.
       XRD: ${params.crystalStructure || 'Unknown'}. EDX: ${params.edxData || 'None'}.
       Synthesis: ${params.synthesisMethod}.
+      Precursors: ${params.startingMaterials?.join(', ') || 'Not explicitly specified'}.
+      Reducing/Stabilizing Agent: ${params.reducingStabilizingAgent || 'None specified'}.
+      Extraction Route: ${params.extractionMethod || 'N/A'}.
+      Biomass Organ / Plant Part: ${params.plantPart || 'N/A'}.
       
       MATERIAL LIFECYCLE STAGE CONTEXT:
       This sample is currently in the following stage: ${stageStr}.
@@ -201,7 +206,9 @@ export const performFullAnalysis = async (
       STRICT CHARACTERIZATION RULES:
       1. NEVER say "Not applicable". Use visual evidence to infer shape, facets, and surface texture.
       2. HELP THE BEGINNER: Describe the shapes clearly.
-      3. LINK METADATA: Connect the visual facets to the provided XRD crystal structure.
+      3. LINK METADATA & PHYTOCHEMICAL REDUCTION: 
+         - Connect the visual facets to the provided XRD crystal structure and precursors.
+         - If a plant or reducing/stabilizing agent is provided (${params.reducingStabilizingAgent || 'None'}), discuss the biochemical reduction and bio-capping mechanism: how phytochemicals (polyphenols, flavonoids, terpenoids, alkaloids, or capping functional groups) stabilize crystal planes, prevent agglomeration, and dictate particle size and morphology.
       4. CORE CONTEXT INTERPRETATION: Take into account the material lifecycle stage context (${stageStr}) when generating your report.
          - If it is 'BEFORE USE', assess the pristine surface, well-defined facets, active sites, crystal planes, and state of dispersion.
          - If it is 'AFTER USE', analyze potential signs of degradation, particle sintering, collapse of porous structure, amorphous layer coating (from adsorbate / dye), cluster aggregation, or facet reconstruction that may have occurred during the reaction or adsorption process. Mention this explicitly in the summary and the contextual interpretation.
@@ -412,22 +419,30 @@ export const performLiteratureReview = async (query: string, more = false): Prom
           });
         }
       } else {
+        // Fallback to open scholarly repositories (OpenAlex / CrossRef) if Gemini tools fail
+        const fallbackPapers = await searchOpenScholarlyRepositories(query, 5);
+        if (fallbackPapers && fallbackPapers.length > 0) {
+          return fallbackPapers;
+        }
         throw e;
       }
     }
 
     try {
-        return JSON.parse(response.text.trim()) as LiteratureItem[];
+        const parsed = JSON.parse(response.text.trim()) as LiteratureItem[];
+        if (parsed && parsed.length > 0) return parsed;
+        return await searchOpenScholarlyRepositories(query, 5);
     } catch(e) {
-        console.error("Lit review parse error", e);
-        return [];
+        console.warn("Lit review parse error, using OpenAlex/CrossRef fallback...", e);
+        return await searchOpenScholarlyRepositories(query, 5);
     }
 };
 
 export const generateFinalSynthesis = async (
     report: AnalysisReportData, 
     params: AnalysisParams, 
-    literature: LiteratureItem[]
+    literature: LiteratureItem[],
+    manualStats?: { count: number; mean: number; stdDev: number; min: number; max: number } | null
 ): Promise<string> => {
     const config = loadAIServiceConfig();
     if (config.provider === 'ollama') {
@@ -436,12 +451,13 @@ export const generateFinalSynthesis = async (
         config.ollamaTextModel || config.ollamaVisionModel || 'llama3.2-vision:11b',
         report,
         params,
-        literature
+        literature,
+        manualStats
       );
     }
 
     if (config.provider !== 'gemini') {
-      return externalGenerateFinalSynthesis(config, report, params, literature);
+      return externalGenerateFinalSynthesis(config, report, params, literature, manualStats);
     }
 
     const ai = getAi(config.geminiApiKey);
@@ -452,31 +468,74 @@ export const generateFinalSynthesis = async (
         ? `After Use (Spent material, e.g., post-reaction/post-adsorption/post-application). Details: ${params.imageStageDetails || 'None'}`
         : 'Unspecified Stage';
 
-    const prompt = `
-      TASK: GENERATE FINAL MANUSCRIPT-READY INTEGRATED INTERPRETATION.
-      
-      INPUT DATA:
-      - Microscopy Instrument Type: ${params.microscopyType} (CRITICAL: You must write exclusively for ${params.microscopyType}. If SEM, do not mention TEM transmission/lattice features or bright-field mode. If TEM, do not mention secondary electron surface roughness detectors).
-      - Visual Analysis: Shape/Morphology = ${params.microscopyType === 'SEM' ? report.semAnalysis.morphology : report.temAnalysis.shapeAnalysis}, Geometry = ${report.temAnalysis.geometryDetails || 'N/A'}, Surface Roughness = ${report.semAnalysis.surfaceRoughness || 'N/A'}.
-      - Metadata: Synthesis=${params.synthesisMethod}, XRD=${params.crystalStructure}, EDX=${params.edxData}.
-      - Material Lifecycle Stage: ${stageStr}.
-      - Measurements: ${report.temAnalysis.averageSizeNm} nm mean.
-      - Comparative Study Findings (For spent/after-use state): ${report.comparisonAnalysis || 'N/A'}
-      - Literature to cite: ${literature.map((l, i) => `[${i+1}] ${l.title} (${l.year})`).join('; ')}.
+    const visualMorphology = params.microscopyType === 'SEM'
+      ? (report.semAnalysis.morphology || 'N/A')
+      : (report.temAnalysis.shapeAnalysis || 'N/A');
+    const visualGeometry = report.temAnalysis.geometryDetails || 'N/A';
+    const visualContrastOrRoughness = params.microscopyType === 'SEM'
+      ? (report.semAnalysis.surfaceRoughness || 'N/A')
+      : (report.temAnalysis.topographyDetails || 'N/A');
+    const caliperStatsStr = manualStats
+      ? `Calibrated caliper dataset: N=${manualStats.count} particles, Mean diameter = ${manualStats.mean.toFixed(2)} nm, Std Dev = ±${manualStats.stdDev.toFixed(2)} nm, Size Range = [${manualStats.min.toFixed(1)} - ${manualStats.max.toFixed(1)} nm]`
+      : `Model-estimated mean: ${report.temAnalysis.averageSizeNm || 'N/A'} nm (Distribution: ${report.temAnalysis.sizeDistribution || 'N/A'}, Count: ~${report.temAnalysis.particleCount || 'N/A'})`;
 
-      INSTRUCTIONS:
-      1. Format: Extensive Scientific Manuscript Discussion (1000+ words).
-      2. Style: IEEE numeric in-text citations [1], [2], etc.
-      3. Content: Link everything. Explain how the synthesis precursors (starting materials) and method resulted in the observed ${params.crystalStructure} phase and how that phase manifests in the facets/surface features seen in the image.
-      4. Life Cycle / Stage & Comparison Analysis:
-         - Discuss the significance of the image being taken ${params.imageStage === 'before' ? 'before use' : params.imageStage === 'after' ? 'after use' : 'at an unspecified stage'}.
-         - If params.imageStage is 'after', you MUST dedicate a major, highly integrated subsection of your discussion to compare the post-reaction/spent state to the pristine state using these exact comparison study findings: "${report.comparisonAnalysis || ''}". Discuss the physical/chemical mechanisms of degradation, sintering, active site blockage, or surface morphology restructuring observed.
-      5. Instrument Specifics: Lock in tightly to **${params.microscopyType}**. Do not mix SEM and TEM terminology or mention unselected modes.
-      6. Educational: Explain concepts like "diffraction contrast", "stochastic growth", or "Scherrer broadening" if applicable (only if relevant to the chosen ${params.microscopyType} mode) so a beginner learns as they read.
-      7. Convincing: Be precise. Avoid vague terms. If EDX mapping confirms stoichiometry, use that to justify the phase identification.
-      8. IEEE numeric style only.
+    const prompt = `
+      TASK: GENERATE FINAL MANUSCRIPT-READY INTEGRATED MATERIALS SCIENCE INTERPRETATION.
       
-      Return text only.
+      COMPREHENSIVE EXPERIMENTAL & VISION CONTEXT:
+      1. EXACT MICROGRAPH VISION MODEL OBSERVATIONS:
+         - Instrument Type: ${params.microscopyType} (Lock in exclusively to ${params.microscopyType}. SEM = surface topography/roughness/depth; TEM = transmission/electron density/bright-field/lattice contrast).
+         - Visual Morphology & Shapes: ${visualMorphology}
+         - Edge Definition & Geometric Boundaries: ${visualGeometry}
+         - Internal Contrast & Surface Texture: ${visualContrastOrRoughness}
+         - Aggregation & Spatial Dispersion: ${report.aggregation}
+         - Measured Particle Sizing: ${caliperStatsStr}
+         - Overall Vision Summary: ${report.summary}
+         - Vision Model Mechanistic Interpretation: ${report.contextualInterpretation}
+         - Spent / After-Use Degradation Analysis: ${report.comparisonAnalysis || 'N/A'}
+
+      2. PRECURSOR CHEMISTRY & SYNTHESIS:
+         - Precursor Starting Materials: ${params.startingMaterials?.join(', ') || 'Not specified'}
+         - Synthesis Route / Methodology: ${params.synthesisMethod || 'Standard synthesis'}
+
+      3. REDUCING / STABILIZING AGENT & EXTRACTION:
+         - Reducing / Capping Agent: ${params.reducingStabilizingAgent || 'None specified'}
+         - Extraction Protocol: ${params.extractionMethod || 'N/A'}
+         - Plant Biomass Organ: ${params.plantPart || 'N/A'}
+
+      4. CRYSTALLOGRAPHY & ELEMENTAL DATA:
+         - XRD Crystal Structure / Phase: ${params.crystalStructure || 'Not specified'}
+         - EDX Elemental Composition: ${params.edxData || 'Not specified'}
+         - Material Lifecycle Stage: ${stageStr}
+
+      5. GROUNDED PEER-REVIEWED LITERATURE:
+         ${literature.map((l, i) => `[${i+1}] ${l.authors || 'Authors'} (${l.year}). "${l.title}". ${l.journal || ''}. Key Findings: ${l.keyFindings}. DOI: ${l.doi || l.url}`).join('\n         ')}
+
+      MANDATORY MANUSCRIPT REQUIREMENTS:
+      1. FORMAT & LENGTH: Extensive Scientific Manuscript Results & Discussion section (1000+ words).
+      2. ACTIVE IEEE NUMERIC CITATIONS: Cite every retrieved paper as [1], [2], [3] throughout the narrative where discussing reduction kinetics, facet capping, XRD diffraction planes, and particle size comparisons.
+      3. INTEGRATED COHESIVE NARRATIVE:
+         - Section 1: Precursor Chemistry & Bio-Reduction Reaction Mechanism:
+           * Detail how the reducing agent (${params.reducingStabilizingAgent || 'reducing agent'}) extracted via ${params.extractionMethod || 'extraction route'} donates electrons to reduce ${params.startingMaterials?.join(', ') || 'metal ions'}.
+           * Discuss specific active phytochemical classes (phenolic hydroxyls, flavonoids, terpenoids, reducing sugars) or reducing molecules.
+           * CRITICAL: Provide the balanced chemical reaction equations in clean LaTeX display math blocks:
+             $$ \\text{R-OH (Polyphenol)} + \\text{Ag}^+ \\longrightarrow \\text{R=O (Quinone intermediate)} + \\text{Ag}^0 + \\text{H}^+ $$
+         - Section 2: Phytochemical Capping, Facet-Directed Growth & XRD Phase:
+           * Link the precursor reduction and capping directly to the XRD crystal structure (${params.crystalStructure || 'crystal phase'}).
+           * Explain how biomolecules passivate specific Miller indices (e.g., (111) vs (200)/(220)/(311) planes in FCC crystals), retarding perpendicular growth and stabilizing the exact morphology observed in the micrograph (${visualMorphology}).
+         - Section 3: Micrograph Visual Findings & Sizing Grounding:
+           * Directly address what the vision model observed: the boundary definition (${visualGeometry}), contrast (${visualContrastOrRoughness}), dispersion (${report.aggregation}), and particle diameter (${caliperStatsStr}).
+           * Correlate these visual findings with literature benchmarks [1], [2].
+         - Section 4: Lifecycle / Stability / Comparative Analysis:
+           * If imageStage is 'after', thoroughly analyze the degradation/spent findings: "${report.comparisonAnalysis || ''}".
+         - Section 5: Grounded References List:
+           * Provide full IEEE references with DOIs at the end.
+
+      MATHEMATICAL & CHEMICAL FORMATTING RULES:
+      - Display equations MUST be wrapped in double dollar signs: $$ ... $$
+      - Inline math, Miller indices, and ion charges MUST use single dollar signs: $ \\text{Ag}^+ $, $ \\text{Ag}^0 $, $ (111) $, $ \\lambda = 1.5406 \\text{ \\AA} $.
+
+      Return clean, publication-grade Markdown text.
     `;
 
     try {

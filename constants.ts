@@ -56,6 +56,7 @@ export const STARTING_MATERIALS: string[] = [
 
 export const SYNTHESIS_METHODS: string[] = [
   'Chemical Reduction',
+  'Green Synthesis',
   'Co-precipitation (pH controlled)',
   'Hydrothermal',
   'Sol-gel',
@@ -64,9 +65,53 @@ export const SYNTHESIS_METHODS: string[] = [
   'Ion Exchange',
   'Memory Effect Reconstruction',
   'Microwave-assisted Synthesis',
-  'Green Synthesis',
   'Microemulsion',
+  'Biosynthesis / Phyto-synthesis',
   'Other'
+];
+
+export const EXTRACTION_METHODS: string[] = [
+  'Aqueous Decoction / Boiling Reflux (Deionized H2O)',
+  'Room Temperature Aqueous Maceration / Stirring',
+  'Hydroalcoholic Maceration (Ethanol / Water)',
+  'Methanolic Extraction',
+  'Ultrasonic-Assisted Extraction (UAE / Sonication)',
+  'Microwave-Assisted Extraction (MAE)',
+  'Soxhlet Extraction',
+  'Cold Percolation / Overnight Soaking',
+  'Hydrodistillation (Essential Oil / Steam)',
+  'Centrifugation & Whatman #1 Filtration',
+  'Supercritical CO2 Fluid Extraction',
+  'Standard Chemical Reduction (No Plant)',
+  'Other / Custom Protocol'
+];
+
+export const PLANT_PARTS: string[] = [
+  'Leaves / Foliage',
+  'Fruit Peel / Rind',
+  'Whole Fruit / Pulp / Juice',
+  'Bark / Stem',
+  'Seeds / Kernel',
+  'Flowers / Petals',
+  'Roots / Rhizomes',
+  'Whole Aerial Plant',
+  'Other Biomass / Agricultural Waste'
+];
+
+export const COMMON_REDUCING_AGENTS: string[] = [
+  'Azadirachta indica (Neem) leaf extract',
+  'Camellia sinensis (Green tea) extract',
+  'Eucalyptus globulus leaf extract',
+  'Aloe vera leaf gel/extract',
+  'Citrus sinensis (Orange peel) extract',
+  'Ocimum sanctum (Tulsi) extract',
+  'Zingiber officinale (Ginger) extract',
+  'Curcuma longa (Turmeric) extract',
+  'Sodium Borohydride (NaBH4)',
+  'Sodium Citrate / Trisodium Citrate',
+  'Ascorbic Acid (Vitamin C)',
+  'Polyvinylpyrrolidone (PVP)',
+  'Hydrazine Hydrate'
 ];
 
 export const MICROSCOPY_TYPES: MicroscopyType[] = ['TEM', 'SEM'];

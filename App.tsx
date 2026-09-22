@@ -3,6 +3,7 @@ import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { AnalysisParams, AnalysisReportData, ChatMessage, ImageFile, Scale, Measurement, LiteratureItem, AIServiceConfig } from './types';
 import { getAutoFillSuggestions, performFullAnalysis, resetChat, performLiteratureReview, processAIAction } from './services/geminiService';
 import { loadAIServiceConfig } from './services/aiConfig';
+import { buildLiteratureSearchQuery } from './services/academicSearchService';
 import Header from './components/Header';
 import ImageUploader from './components/ImageUploader';
 import AnalysisForm from './components/AnalysisForm';
@@ -141,10 +142,7 @@ export default function App() {
         baselineImage?.base64
       );
       setAnalysisReport(report);
-      
-      if (analysisParams.materialType && analysisParams.materialType !== 'Other') {
-        handleLitReview(analysisParams);
-      }
+      // Literature review is now on-demand by clicking "Search Literature" in the report
     } catch (err) {
       setError(`Analysis failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -154,15 +152,7 @@ export default function App() {
 
   const handleLitReview = async (params: AnalysisParams) => {
     setIsReviewing(true);
-    const components = [
-        params.nanoparticleName,
-        params.materialType,
-        params.crystalStructure,
-        params.synthesisMethod,
-        params.startingMaterials?.join(' ')
-    ].filter(Boolean);
-
-    const query = `${components.join(', ')} microscopy characterization study`;
+    const query = buildLiteratureSearchQuery(params);
     
     try {
         const result = await performLiteratureReview(query);
@@ -257,7 +247,6 @@ export default function App() {
       {isAnalyzing && (
         <Loader message={getEngineLoaderMessage()} />
       )}
-      {isReviewing && <Loader message="Cross-referencing global publications for grounded characterization data..." />}
       
       <div className="max-w-8xl mx-auto space-y-8">
         <Header aiConfig={aiConfig} onOpenSettings={() => setIsSettingsOpen(true)} />
@@ -366,6 +355,8 @@ export default function App() {
                     setAnalysisParams={setAnalysisParams}
                     literature={litReview}
                     onExtendLiterature={handleExtendLit}
+                    onSearchLiterature={() => handleLitReview(analysisParams)}
+                    isSearchingLiterature={isReviewing}
                     imageUrl={image.url}
                   />
                   <div>

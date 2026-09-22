@@ -4,6 +4,8 @@ import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
 import { AnalysisParams, AnalysisReportData, LiteratureItem } from '../types';
 import { regenerateInterpretation, processAIAction, performLiteratureReview, generateFinalSynthesis } from '../services/geminiService';
+import { buildLiteratureSearchQuery } from '../services/academicSearchService';
+import { ScientificMarkdownRenderer } from './ScientificMarkdownRenderer';
 import { 
   DocumentTextIcon, 
   CheckCircleIcon, 
@@ -29,6 +31,8 @@ interface AnalysisReportProps {
   setAnalysisParams: React.Dispatch<React.SetStateAction<AnalysisParams>>;
   literature: LiteratureItem[] | null;
   onExtendLiterature: (items: LiteratureItem[]) => void;
+  onSearchLiterature?: () => void;
+  isSearchingLiterature?: boolean;
   imageUrl: string;
 }
 
@@ -47,7 +51,7 @@ const ReportItem: React.FC<{ label: string; value?: string | number }> = ({ labe
 );
 
 const AnalysisReport: React.FC<AnalysisReportProps> = ({ 
-    report, manualStats, analysisParams, literature, onExtendLiterature, imageUrl
+    report, manualStats, analysisParams, literature, onExtendLiterature, onSearchLiterature, isSearchingLiterature, imageUrl
 }) => {
     const reportRef = useRef<HTMLDivElement>(null);
     const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -75,7 +79,7 @@ const AnalysisReport: React.FC<AnalysisReportProps> = ({
         }
         setIsSynthesizing(true);
         try {
-            const result = await generateFinalSynthesis(report, analysisParams, literature);
+            const result = await generateFinalSynthesis(report, analysisParams, literature, manualStats as any);
             setFinalSynthesis(result);
         } catch (e) {
             console.error(e);
@@ -144,7 +148,8 @@ const AnalysisReport: React.FC<AnalysisReportProps> = ({
     const handleShowMoreLiterature = async () => {
         setIsExpandingLit(true);
         try {
-            const query = `Extensive characterization study of ${analysisParams.materialType} synthesis via ${analysisParams.synthesisMethod} including SEM TEM XRD data`;
+            const baseQuery = buildLiteratureSearchQuery(analysisParams);
+            const query = `${baseQuery} XRD diffraction crystal facets peer-reviewed`;
             const results = await performLiteratureReview(query, true);
             onExtendLiterature(results);
         } catch (err) {
@@ -195,6 +200,15 @@ const AnalysisReport: React.FC<AnalysisReportProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <ReportSection title="Project Context" icon={<CheckCircleIcon className="w-4 h-4"/>}>
                     <ReportItem label="Synthesis" value={analysisParams.synthesisMethod} />
+                    {analysisParams.reducingStabilizingAgent && (
+                        <ReportItem label="Reducing / Plant Agent" value={analysisParams.reducingStabilizingAgent} />
+                    )}
+                    {analysisParams.extractionMethod && (
+                        <ReportItem label="Extraction Protocol" value={analysisParams.extractionMethod} />
+                    )}
+                    {analysisParams.plantPart && (
+                        <ReportItem label="Biomass Organ" value={analysisParams.plantPart} />
+                    )}
                     <ReportItem label="EDX/Elemental" value={analysisParams.edxData} />
                     <ReportItem label="Instrument" value={`${analysisParams.microscopyType} @ ${analysisParams.magnification}`} />
                     <ReportItem 
@@ -261,22 +275,35 @@ const AnalysisReport: React.FC<AnalysisReportProps> = ({
             {/* INTEGRATED SYNTHESIS: The main highlight */}
             <ReportSection title="Final Synthesis & Integrated Discussion" icon={<KeyIcon className="w-4 h-4"/>} className="bg-cyan-900/10 border-cyan-500/40 border-2">
                 {!finalSynthesis ? (
-                    <div className="text-center py-6">
-                        <p className="text-sm text-gray-400 mb-4 italic">Generate a professional 1000-word interpretation linking visual findings, precursors, XRD, and EDX with IEEE numeric citations.</p>
-                        <button 
-                            onClick={handleGenerateSynthesis}
-                            disabled={isSynthesizing || !literature}
-                            className="bg-cyan-600 hover:bg-cyan-500 text-white px-6 py-3 rounded-lg text-sm font-bold flex items-center gap-2 mx-auto transition-all shadow-xl disabled:opacity-50"
-                        >
-                            <SparklesIcon className="w-5 h-5" />
-                            {isSynthesizing ? 'Synthesizing Detailed Manuscript...' : 'Generate Integrated Synthesis'}
-                        </button>
-                        {!literature && <p className="text-[10px] text-amber-500 mt-2 font-bold uppercase">Find Literature Results First to Enable Citations</p>}
+                    <div className="text-center py-6 space-y-3">
+                        <p className="text-sm text-gray-400 italic max-w-xl mx-auto">Generate a professional 1000-word interpretation linking visual findings, precursors, XRD, and EDX with IEEE numeric citations.</p>
+                        {literature && literature.length > 0 ? (
+                            <button 
+                                onClick={handleGenerateSynthesis}
+                                disabled={isSynthesizing}
+                                className="bg-cyan-600 hover:bg-cyan-500 text-white px-6 py-3 rounded-lg text-sm font-bold flex items-center gap-2 mx-auto transition-all shadow-xl disabled:opacity-50"
+                            >
+                                <SparklesIcon className="w-5 h-5" />
+                                {isSynthesizing ? 'Synthesizing Detailed Manuscript...' : 'Generate Integrated Synthesis'}
+                            </button>
+                        ) : (
+                            <div className="space-y-2">
+                                <button 
+                                    onClick={onSearchLiterature}
+                                    disabled={isSearchingLiterature}
+                                    className="bg-amber-600/80 hover:bg-amber-600 text-white px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-2 mx-auto transition-all shadow-md"
+                                >
+                                    <AcademicCapIcon className="w-4 h-4" />
+                                    {isSearchingLiterature ? 'Searching Academic Papers...' : '1. Search Literature Below First to Enable Citations'}
+                                </button>
+                                <p className="text-[11px] text-gray-400">Literature grounding provides the numeric references ([1], [2]...) needed for the synthesis.</p>
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <div className="space-y-4">
-                        <div className="prose prose-sm prose-invert max-w-none text-gray-200 leading-relaxed text-sm bg-gray-900/50 p-6 rounded-lg border border-gray-700 font-serif shadow-inner">
-                            <p className="whitespace-pre-wrap">{finalSynthesis}</p>
+                        <div className="bg-gray-900/60 p-6 rounded-xl border border-gray-700/80 shadow-inner">
+                            <ScientificMarkdownRenderer content={finalSynthesis} />
                         </div>
                         <div className="flex justify-end gap-2">
                             <button onClick={() => setFinalSynthesis(null)} className="text-[10px] text-gray-500 hover:text-red-400 font-bold uppercase">Reset Synthesis</button>
@@ -300,8 +327,8 @@ const AnalysisReport: React.FC<AnalysisReportProps> = ({
                         </button>
                     ))}
                 </div>
-                <div className="prose prose-sm prose-invert max-w-none text-gray-200 text-sm italic">
-                    <p className="whitespace-pre-wrap">{interpretationVersions[activeInterpretationIndex]}</p>
+                <div className="bg-gray-900/40 p-4 rounded-lg border border-gray-700/50">
+                    <ScientificMarkdownRenderer content={interpretationVersions[activeInterpretationIndex]} />
                 </div>
                 <div className="mt-6 flex flex-wrap gap-2 border-t border-gray-700 pt-4 items-end">
                     <div className="flex flex-col gap-1 flex-grow">
@@ -316,59 +343,128 @@ const AnalysisReport: React.FC<AnalysisReportProps> = ({
                 </div>
             </ReportSection>
 
-            {/* Literature Review with DOI extraction */}
-            {literature && literature.length > 0 && (
-                <ReportSection title="Scholar Grounding (IEEE Style)" icon={<AcademicCapIcon className="w-4 h-4"/>} className="bg-amber-900/5 border-amber-500/20">
-                    <div className="flex justify-between items-center mb-3">
-                        <p className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">Global References</p>
-                        <button 
-                            onClick={handleShowMoreLiterature} 
-                            disabled={isExpandingLit}
-                            className="bg-amber-600 hover:bg-amber-500 text-white text-[9px] px-3 py-1 rounded font-black uppercase flex items-center gap-2 transition-all shadow-md"
-                        >
-                            <PlusIcon className="w-3 h-3" />
-                            {isExpandingLit ? 'Searching Repositories...' : 'Find More Grounded Papers'}
-                        </button>
+            {/* Literature Review with DOI extraction (On-demand by clicking) */}
+            <ReportSection title="Scholar Grounding & Peer-Reviewed Literature" icon={<AcademicCapIcon className="w-4 h-4"/>} className="bg-amber-900/5 border-amber-500/20">
+                {(!literature || literature.length === 0) ? (
+                    <div className="p-4 bg-gray-900/60 rounded-lg border border-gray-700/60 text-center space-y-3">
+                        <div className="flex items-center justify-center gap-2 text-amber-400 font-semibold text-sm">
+                            <AcademicCapIcon className="w-5 h-5" />
+                            <span>Peer-Reviewed Literature Grounding (On-Demand)</span>
+                        </div>
+                        <p className="text-xs text-gray-300 max-w-xl mx-auto leading-relaxed">
+                            Review your visual characterization and caliper sizing above first. When ready, click below to search verified peer-reviewed articles matching <strong className="text-cyan-300 font-semibold">{analysisParams.nanoparticleName || analysisParams.materialType || 'your sample'}</strong>.
+                        </p>
+                        <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] text-gray-400">
+                            <span className="bg-gray-800 px-2 py-0.5 rounded border border-gray-700 font-mono">Sample: {analysisParams.nanoparticleName || analysisParams.materialType || 'Nanomaterial'}</span>
+                            {analysisParams.crystalStructure && <span className="bg-gray-800 px-2 py-0.5 rounded border border-gray-700 font-mono">Phase: {analysisParams.crystalStructure}</span>}
+                            {analysisParams.synthesisMethod && <span className="bg-gray-800 px-2 py-0.5 rounded border border-gray-700 font-mono">Synthesis: {analysisParams.synthesisMethod}</span>}
+                            {analysisParams.reducingStabilizingAgent && (
+                                <span className="bg-emerald-950/80 text-emerald-300 px-2 py-0.5 rounded border border-emerald-700/60 font-mono">
+                                    🌿 Agent: {analysisParams.reducingStabilizingAgent}
+                                </span>
+                            )}
+                            {analysisParams.extractionMethod && (
+                                <span className="bg-emerald-950/80 text-emerald-300 px-2 py-0.5 rounded border border-emerald-700/60 font-mono">
+                                    Extract: {analysisParams.extractionMethod}
+                                </span>
+                            )}
+                        </div>
+                        <div className="pt-2">
+                            <button
+                                onClick={onSearchLiterature}
+                                disabled={isSearchingLiterature}
+                                className="bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 text-white px-5 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-2 mx-auto transition-all shadow-lg shadow-amber-950/40 hover:scale-[1.02]"
+                            >
+                                {isSearchingLiterature ? (
+                                    <>
+                                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                        Searching Academic Repositories...
+                                    </>
+                                ) : (
+                                    <>
+                                        <AcademicCapIcon className="w-4 h-4" />
+                                        Search Peer-Reviewed Literature
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                        <p className="text-[10px] text-gray-500">
+                            🌐 Live search works across all engines: Google Search (Gemini) and free open repositories OpenAlex & CrossRef (Ollama, OpenAI, Claude).
+                        </p>
                     </div>
-                    <div className="overflow-x-auto rounded border border-gray-700/50 shadow-inner">
-                        <table className="w-full text-left text-[11px] leading-tight">
-                            <thead className="bg-gray-900/80 text-gray-400 font-bold uppercase border-b border-gray-700">
-                                <tr>
-                                    <th className="p-2 border-r border-gray-700 w-8">#</th>
-                                    <th className="p-2 border-r border-gray-700">Publication / DOI</th>
-                                    <th className="p-2 border-r border-gray-700">Findings Correlation</th>
-                                    <th className="p-2">Access</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {literature.map((item, idx) => (
-                                    <tr key={idx} className="border-b border-gray-700/50 hover:bg-gray-700/30 transition-colors">
-                                        <td className="p-2 border-r border-gray-700 text-gray-500 font-bold">[{idx + 1}]</td>
-                                        <td className="p-2 border-r border-gray-700">
-                                            <div className="font-bold text-gray-200 mb-0.5">{item.title}</div>
-                                            <div className="text-[9px] text-gray-400">{item.authors} ({item.year})</div>
-                                            {item.doi && <div className="text-[8px] text-cyan-600 mt-1 font-mono uppercase bg-cyan-900/20 px-1 py-0.5 rounded inline-block">DOI: {item.doi}</div>}
-                                        </td>
-                                        <td className="p-2 border-r border-gray-700 italic text-gray-300">
-                                            {item.comparison || item.keyFindings}
-                                        </td>
-                                        <td className="p-2">
-                                            <div className="flex flex-col gap-2">
-                                                <a href={item.url} target="_blank" rel="noopener noreferrer" className="bg-cyan-900/40 hover:bg-cyan-800 text-cyan-300 text-[9px] px-2 py-1 rounded flex items-center justify-center gap-1 border border-cyan-700/50 shadow-sm">
-                                                    <LinkIcon className="w-3 h-3" /> Source
-                                                </a>
-                                                <button onClick={() => copyCitation(item.fullCitation)} className="bg-gray-700 hover:bg-gray-600 text-gray-300 text-[9px] px-2 py-1 rounded flex items-center justify-center gap-1 border border-gray-600 transition-all">
-                                                    <ClipboardIcon className="w-3 h-3" /> Cite
-                                                </button>
-                                            </div>
-                                        </td>
+                ) : (
+                    <div className="space-y-3">
+                        <div className="flex justify-between items-center">
+                            <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-amber-500 uppercase tracking-widest">
+                                    {literature.length} Grounded References
+                                </span>
+                                {isSearchingLiterature && (
+                                    <span className="text-[10px] text-cyan-400 flex items-center gap-1 animate-pulse">
+                                        <div className="w-2.5 h-2.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+                                        Updating...
+                                    </span>
+                                )}
+                            </div>
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={onSearchLiterature}
+                                    disabled={isSearchingLiterature || isExpandingLit}
+                                    className="bg-gray-700 hover:bg-gray-600 text-gray-300 text-[9px] px-2.5 py-1 rounded font-bold uppercase transition-all"
+                                    title="Re-run search with current sample metadata"
+                                >
+                                    Re-Search
+                                </button>
+                                <button 
+                                    onClick={handleShowMoreLiterature} 
+                                    disabled={isExpandingLit || isSearchingLiterature}
+                                    className="bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 text-white text-[9px] px-3 py-1 rounded font-black uppercase flex items-center gap-1.5 transition-all shadow-md"
+                                >
+                                    <PlusIcon className="w-3 h-3" />
+                                    {isExpandingLit ? 'Searching Repositories...' : 'Find More Grounded Papers'}
+                                </button>
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto rounded border border-gray-700/50 shadow-inner">
+                            <table className="w-full text-left text-[11px] leading-tight">
+                                <thead className="bg-gray-900/80 text-gray-400 font-bold uppercase border-b border-gray-700">
+                                    <tr>
+                                        <th className="p-2 border-r border-gray-700 w-8">#</th>
+                                        <th className="p-2 border-r border-gray-700">Publication / DOI</th>
+                                        <th className="p-2 border-r border-gray-700">Findings Correlation</th>
+                                        <th className="p-2">Access</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
+                                </thead>
+                                <tbody>
+                                    {literature.map((item, idx) => (
+                                        <tr key={idx} className="border-b border-gray-700/50 hover:bg-gray-700/30 transition-colors">
+                                            <td className="p-2 border-r border-gray-700 text-gray-500 font-bold">[{idx + 1}]</td>
+                                            <td className="p-2 border-r border-gray-700">
+                                                <div className="font-bold text-gray-200 mb-0.5">{item.title}</div>
+                                                <div className="text-[9px] text-gray-400">{item.authors} ({item.year})</div>
+                                                {item.doi && <div className="text-[8px] text-cyan-600 mt-1 font-mono uppercase bg-cyan-900/20 px-1 py-0.5 rounded inline-block">DOI: {item.doi}</div>}
+                                            </td>
+                                            <td className="p-2 border-r border-gray-700 italic text-gray-300">
+                                                {item.comparison || item.keyFindings}
+                                            </td>
+                                            <td className="p-2">
+                                                <div className="flex flex-col gap-2">
+                                                    <a href={item.url} target="_blank" rel="noopener noreferrer" className="bg-cyan-900/40 hover:bg-cyan-800 text-cyan-300 text-[9px] px-2 py-1 rounded flex items-center justify-center gap-1 border border-cyan-700/50 shadow-sm">
+                                                        <LinkIcon className="w-3 h-3" /> Source
+                                                    </a>
+                                                    <button onClick={() => copyCitation(item.fullCitation)} className="bg-gray-700 hover:bg-gray-600 text-gray-300 text-[9px] px-2 py-1 rounded flex items-center justify-center gap-1 border border-gray-600 transition-all">
+                                                        <ClipboardIcon className="w-3 h-3" /> Cite
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
-                </ReportSection>
-            )}
+                )}
+            </ReportSection>
         </div>
     );
 };

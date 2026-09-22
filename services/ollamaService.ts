@@ -7,6 +7,7 @@ import {
   Scale, 
   Measurement 
 } from '../types';
+import { searchOpenScholarlyRepositories } from './academicSearchService';
 
 export const DEFAULT_OLLAMA_HOST = 'http://localhost:11434';
 export const PROXY_OLLAMA_HOST = '/ollama';
@@ -233,6 +234,10 @@ export async function ollamaPerformFullAnalysis(
 You are an expert materials characterization scientist. Analyze this ${params.microscopyType} micrograph for sample: ${params.nanoparticleName || 'Nanomaterial'}.
 Metadata:
 - Synthesis Method: ${params.synthesisMethod || 'Standard synthesis'}
+- Precursors: ${params.startingMaterials?.join(', ') || 'Not specified'}
+- Reducing / Stabilizing Agent (Plant or Chemical): ${params.reducingStabilizingAgent || 'None specified'}
+- Extraction Protocol: ${params.extractionMethod || 'N/A'}
+- Biomass Organ / Plant Part: ${params.plantPart || 'N/A'}
 - Crystal Structure / XRD: ${params.crystalStructure || 'Not specified'}
 - EDX Data: ${params.edxData || 'None'}
 - Material Lifecycle Stage: ${stageStr}
@@ -240,8 +245,9 @@ Metadata:
 ${measurementsContext}
 ${baselineImageBase64 ? 'Note: A secondary baseline image (Image 2) is provided showing the pristine BEFORE-USE state for side-by-side comparison.' : ''}
 
-STRICT INSTRUMENT REQUIREMENTS:
+STRICT INSTRUMENT & BIOSYNTHESIS REQUIREMENTS:
 - Chosen instrument is ${params.microscopyType}.
+- If a plant extract or reducing agent is provided (${params.reducingStabilizingAgent || 'None'}), discuss how its bioactive phytochemicals (e.g. flavonoids, polyphenols, terpenoids) or stabilizing ligands reduce precursors and cap particle facets to dictate the observed geometry and aggregation state.
 - If SEM: Focus purely on surface topography, morphological roughness, cluster structure, secondary electron imaging, and 3D depth of field. Set "temAnalysis.isApplicable" to false and "semAnalysis.isApplicable" to true.
 - If TEM: Focus purely on electron transmission, bright/dark-field characteristics, crystalline facets, internal density, and contrast. Set "semAnalysis.isApplicable" to false and "temAnalysis.isApplicable" to true.
 
@@ -328,6 +334,17 @@ export async function ollamaPerformLiteratureReview(
   model: string,
   query: string
 ): Promise<LiteratureItem[]> {
+  // First attempt live network search using free scholarly repositories (OpenAlex & CrossRef)
+  try {
+    const livePapers = await searchOpenScholarlyRepositories(query, 5);
+    if (livePapers && livePapers.length > 0) {
+      return livePapers;
+    }
+  } catch (netErr) {
+    console.warn("Live academic network search failed, falling back to local Ollama weights...", netErr);
+  }
+
+  // Fallback to local Ollama model parametric memory (works 100% offline)
   const target = normalizeHost(host);
   const prompt = `You are a materials science research librarian. Provide 3-5 relevant published scholarly peer-reviewed papers for: "${query}".
 Return ONLY a valid JSON array of objects with this schema:
@@ -345,21 +362,26 @@ Return ONLY a valid JSON array of objects with this schema:
   }
 ]`;
 
-  const res = await fetch(`${target}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      format: 'json',
-      stream: false
-    })
-  });
+  try {
+    const res = await fetch(`${target}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        format: 'json',
+        stream: false
+      })
+    });
 
-  if (!res.ok) return [];
-  const data = await res.json();
-  const rawText = data.message?.content || '[]';
-  return parseJsonSafely<LiteratureItem[]>(rawText, []);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const rawText = data.message?.content || '[]';
+    return parseJsonSafely<LiteratureItem[]>(rawText, []);
+  } catch (ollamaErr) {
+    console.error("Local Ollama lit review error", ollamaErr);
+    return [];
+  }
 }
 
 export async function ollamaGenerateFinalSynthesis(
@@ -367,21 +389,52 @@ export async function ollamaGenerateFinalSynthesis(
   model: string,
   report: AnalysisReportData,
   params: AnalysisParams,
-  literature: LiteratureItem[]
+  literature: LiteratureItem[],
+  manualStats?: { count: number; mean: number; stdDev: number; min: number; max: number } | null
 ): Promise<string> {
   const target = normalizeHost(host);
-  const prompt = `TASK: GENERATE FINAL MANUSCRIPT-READY INTEGRATED INTERPRETATION.
+  const visualMorphology = params.microscopyType === 'SEM'
+    ? (report.semAnalysis.morphology || 'N/A')
+    : (report.temAnalysis.shapeAnalysis || 'N/A');
+  const visualGeometry = report.temAnalysis.geometryDetails || 'N/A';
+  const caliperStatsStr = manualStats
+    ? `Calibrated caliper dataset: N=${manualStats.count}, Mean = ${manualStats.mean.toFixed(2)} nm, StdDev = ±${manualStats.stdDev.toFixed(2)} nm`
+    : `Estimated Mean = ${report.temAnalysis.averageSizeNm || 'N/A'} nm`;
+
+  const prompt = `TASK: GENERATE FINAL MANUSCRIPT-READY INTEGRATED MATERIALS SCIENCE INTERPRETATION.
 Sample: ${params.nanoparticleName || 'Nanomaterial'}, Instrument: ${params.microscopyType}.
-Synthesis: ${params.synthesisMethod}, XRD Phase: ${params.crystalStructure}.
-Visual Morphology: ${params.microscopyType === 'SEM' ? report.semAnalysis.morphology : report.temAnalysis.shapeAnalysis}.
-Aggregation: ${report.aggregation}.
-Lifecycle Stage: ${params.imageStage}.
-Literature: ${literature.map((l, i) => `[${i+1}] ${l.title} (${l.year})`).join('; ')}.
+1. EXACT VISION MODEL OBSERVATIONS:
+- Morphology / Shape: ${visualMorphology}
+- Geometry & Facets: ${visualGeometry}
+- Contrast / Surface: ${report.temAnalysis.topographyDetails || report.semAnalysis.surfaceRoughness || 'N/A'}
+- Aggregation State: ${report.aggregation}
+- Particle Dimensions: ${caliperStatsStr}
+- Vision Context: ${report.contextualInterpretation}
+- Spent / Lifecycle Analysis: ${report.comparisonAnalysis || 'N/A'}
+
+2. SYNTHESIS & PRECURSORS:
+- Synthesis Route: ${params.synthesisMethod || 'Standard synthesis'}
+- Precursor Starting Materials: ${params.startingMaterials?.join(', ') || 'N/A'}
+- Reducing / Stabilizing Agent: ${params.reducingStabilizingAgent || 'None specified'}
+- Extraction Protocol: ${params.extractionMethod || 'N/A'}
+- Plant Biomass Organ: ${params.plantPart || 'N/A'}
+
+3. CRYSTALLOGRAPHY & EDX:
+- XRD Crystal Structure / Phase: ${params.crystalStructure || 'N/A'}
+- EDX Composition: ${params.edxData || 'N/A'}
+- Lifecycle Stage: ${params.imageStage || 'not_specified'}
+
+4. GROUNDED LITERATURE TO CITE:
+${literature.map((l, i) => `[${i+1}] ${l.authors || 'Authors'} (${l.year}). "${l.title}". ${l.journal || ''}. Key Findings: ${l.keyFindings}. DOI: ${l.doi || l.url}`).join('\n')}
 
 INSTRUCTIONS:
-Write an extensive scientific manuscript discussion (800+ words) using IEEE numeric citations [1], [2], etc.
-Synthesize the synthesis mechanism, precursor chemistry, resulting crystal phase, facet development, and microscopy morphology.
-Return clean text in Markdown format.`;
+Write an extensive scientific manuscript discussion (1000+ words) using IEEE numeric citations [1], [2], etc.
+Synthesize the synthesis mechanism, precursor reduction kinetics, crystal plane passivation, and microscopy morphology.
+CRITICAL FORMATTING:
+- Write chemical reaction equations in clean LaTeX display math blocks:
+  $$ \\text{R-OH (Polyphenol)} + \\text{Ag}^+ \\longrightarrow \\text{R=O (Quinone intermediate)} + \\text{Ag}^0 + \\text{H}^+ $$
+- Use inline math for ions and crystal indices: $ \\text{Ag}^+ $, $ (111) $, $ (200) $.
+Return clean Markdown format.`;
 
   const res = await fetch(`${target}/api/chat`, {
     method: 'POST',

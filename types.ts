@@ -17,6 +17,9 @@ export interface AnalysisParams {
   crystalStructure?: string;
   edxData?: string;
   startingMaterials?: string[];
+  reducingStabilizingAgent?: string;
+  extractionMethod?: string;
+  plantPart?: string;
   microscopyType: MicroscopyType;
   detector: Detector;
   vacuum: Vacuum;

@@ -8,6 +8,7 @@ An intelligent, publication-ready research platform designed for materials scien
 
 - **Automated & Manual Particle Characterization**: Measure nanoparticle dimensions, diameter, aspect ratio, agglomeration state, and morphology distributions.
 - **Interactive Scale Calibration**: Define custom scale bars in nanometers (nm) or micrometers (µm) with click-and-drag measuring calipers.
+- **Green Synthesis & Plant Extraction Protocol**: Specify plant extracts (e.g., *Azadirachta indica* / Neem, Green tea, Eucalyptus, Aloe vera) or chemical reducing agents (citrate, NaBH4, ascorbic acid) along with extraction methods (Aqueous decoction, ultrasound UAE, microwave MAE, Soxhlet) to ground phytochemical capping and reduction mechanisms in the AI analysis and scholarly literature review.
 - **Comparative Before/After Studies**: Compare pristine (fresh) nanomaterials with post-reaction / post-adsorption micrographs side-by-side.
 - **Multi-Engine AI Integration**:
   - **Google Gemini** (Gemini 3.8 Flash, 3.1 Pro Preview, etc.)

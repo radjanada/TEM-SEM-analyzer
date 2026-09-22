@@ -2,7 +2,20 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { AnalysisParams, ImageFile } from '../types';
-import { MATERIAL_TYPES, SYNTHESIS_METHODS, MICROSCOPY_TYPES, DETECTORS, VACUUM_LEVELS, AGGREGATION_STATES, TEM_MODES, PARTICLE_SHAPES, STARTING_MATERIALS } from '../constants';
+import { 
+  MATERIAL_TYPES, 
+  SYNTHESIS_METHODS, 
+  MICROSCOPY_TYPES, 
+  DETECTORS, 
+  VACUUM_LEVELS, 
+  AGGREGATION_STATES, 
+  TEM_MODES, 
+  PARTICLE_SHAPES, 
+  STARTING_MATERIALS,
+  EXTRACTION_METHODS,
+  PLANT_PARTS,
+  COMMON_REDUCING_AGENTS
+} from '../constants';
 import { SparklesIcon, UploadIcon, TrashIcon } from './icons';
 
 interface AnalysisFormProps {
@@ -160,6 +173,125 @@ const AnalysisForm: React.FC<AnalysisFormProps> = ({
             {params.microscopyType === 'TEM' ? renderSelect('temMode', 'TEM Mode', TEM_MODES) : renderSelect('detector', 'SEM Detector', DETECTORS)}
             {renderSelect('vacuum', 'Vacuum Environment', VACUUM_LEVELS)}
             {renderInput('magnification', 'Magnification', 'e.g., 50.00 kX')}
+        </div>
+
+        {/* Reducing & Stabilizing Agent / Green Synthesis Context Card */}
+        <div className="bg-emerald-950/20 border border-emerald-500/30 rounded-lg p-4 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-900/40 pb-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-emerald-400 text-base">🌿</span>
+                <label className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
+                  Reducing / Stabilizing Agent & Plant Extraction Protocol
+                </label>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-0.5">
+                Provide a plant/biomass name for green synthesis or chemical reducing agent to ground phytochemical capping & reduction mechanisms in the AI analysis and literature search.
+              </p>
+            </div>
+            {params.reducingStabilizingAgent && (
+              <span className="text-[10px] text-emerald-300 font-semibold bg-emerald-900/60 border border-emerald-600/50 px-2 py-0.5 rounded self-start sm:self-auto font-mono">
+                ✓ Phyto-Context Attached
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label htmlFor="reducingStabilizingAgent" className="block text-xs font-bold text-gray-400 uppercase mb-1">
+                Reducing / Stabilizing Agent (or Plant)
+              </label>
+              <input
+                type="text"
+                id="reducingStabilizingAgent"
+                name="reducingStabilizingAgent"
+                value={params.reducingStabilizingAgent || ''}
+                onChange={(e) => {
+                  handleChange(e);
+                  const val = e.target.value.toLowerCase();
+                  if (val && (!params.synthesisMethod || params.synthesisMethod === 'Chemical Reduction')) {
+                    if (val.includes('extract') || val.includes('leaf') || val.includes('tea') || val.includes('peel') || val.includes('plant') || val.includes('indica') || val.includes('aloe')) {
+                      setParams(p => ({ ...p, synthesisMethod: 'Green Synthesis' }));
+                    }
+                  }
+                }}
+                placeholder="e.g. Azadirachta indica (Neem), Green tea, Sodium citrate"
+                className="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 focus:ring-1 focus:ring-emerald-500 outline-none text-sm transition-all placeholder:text-gray-500"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="extractionMethod" className="block text-xs font-bold text-gray-400 uppercase mb-1">
+                Extraction / Preparation Method
+              </label>
+              <select
+                id="extractionMethod"
+                name="extractionMethod"
+                value={params.extractionMethod || ''}
+                onChange={handleChange}
+                className="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 focus:ring-1 focus:ring-emerald-500 outline-none text-sm transition-all"
+              >
+                <option value="">-- Select Extraction Protocol --</option>
+                {EXTRACTION_METHODS.map(method => (
+                  <option key={method} value={method}>{method}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="plantPart" className="block text-xs font-bold text-gray-400 uppercase mb-1">
+                Plant Part / Biomass Organ (Optional)
+              </label>
+              <select
+                id="plantPart"
+                name="plantPart"
+                value={params.plantPart || ''}
+                onChange={handleChange}
+                className="w-full bg-gray-700 border border-gray-600 text-white rounded-md p-2 focus:ring-1 focus:ring-emerald-500 outline-none text-sm transition-all"
+              >
+                <option value="">-- Choose Plant Organ --</option>
+                {PLANT_PARTS.map(part => (
+                  <option key={part} value={part}>{part}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Quick Select Preset Chips */}
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            <span className="text-[10px] text-gray-400 uppercase font-semibold mr-1">Quick Suggestions:</span>
+            {[
+              { label: '🌿 Neem Leaf', name: 'Azadirachta indica (Neem) leaf extract', method: 'Aqueous Decoction / Boiling Reflux (Deionized H2O)', part: 'Leaves / Foliage' },
+              { label: '🌿 Green Tea', name: 'Camellia sinensis (Green tea) extract', method: 'Aqueous Decoction / Boiling Reflux (Deionized H2O)', part: 'Leaves / Foliage' },
+              { label: '🌿 Eucalyptus', name: 'Eucalyptus globulus leaf extract', method: 'Aqueous Decoction / Boiling Reflux (Deionized H2O)', part: 'Leaves / Foliage' },
+              { label: '🌿 Orange Peel', name: 'Citrus sinensis (Orange peel) extract', method: 'Hydroalcoholic Maceration (Ethanol / Water)', part: 'Fruit Peel / Rind' },
+              { label: '🌿 Aloe Vera', name: 'Aloe vera leaf gel/extract', method: 'Room Temperature Aqueous Maceration / Stirring', part: 'Leaves / Foliage' },
+              { label: '🧪 Sodium Citrate', name: 'Sodium Citrate / Trisodium Citrate', method: 'Standard Chemical Reduction (No Plant)', part: '' },
+              { label: '🧪 NaBH4', name: 'Sodium Borohydride (NaBH4)', method: 'Standard Chemical Reduction (No Plant)', part: '' },
+              { label: '🧪 Ascorbic Acid', name: 'Ascorbic Acid (Vitamin C)', method: 'Standard Chemical Reduction (No Plant)', part: '' },
+            ].map(agent => (
+              <button
+                key={agent.name}
+                type="button"
+                onClick={() => {
+                  setParams(prev => ({
+                    ...prev,
+                    reducingStabilizingAgent: agent.name,
+                    extractionMethod: agent.method,
+                    plantPart: agent.part || prev.plantPart,
+                    synthesisMethod: agent.name.startsWith('🌿') || agent.label.startsWith('🌿') ? 'Green Synthesis' : prev.synthesisMethod
+                  }));
+                }}
+                className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
+                  params.reducingStabilizingAgent === agent.name
+                    ? 'bg-emerald-800 text-white border-emerald-400 font-bold shadow-sm'
+                    : 'bg-gray-800/90 text-gray-300 border-gray-700 hover:border-gray-500 hover:text-white'
+                }`}
+              >
+                {agent.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Image Life Cycle Context Option Zone */}
