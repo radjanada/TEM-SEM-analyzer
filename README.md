@@ -35,7 +35,7 @@ Node.js is the free runtime environment needed to run the application.
 3. Run the installer and click **Next** through the setup (keep all default checkboxes checked).
 4. Verify the installation:
    - On **Windows**: Open *Command Prompt* or *PowerShell*.
-   - On **Mac**: Open *Terminal*.
+   - On **Mac/Linux**: Open *Terminal*.
    - Type:
      ```bash
      node -v
@@ -54,8 +54,8 @@ Node.js is the free runtime environment needed to run the application.
 #### Option B: Clone with Git
 If you have Git installed, open your terminal and run:
 ```bash
-git clone https://github.com/your-username/tem-sem-image-analysis.git
-cd tem-sem-image-analysis
+git clone https://github.com/radjanada/TEM-SEM-analyzer.git
+cd TEM-SEM-analyzer
 ```
 
 ---
