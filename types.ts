@@ -98,3 +98,48 @@ export interface Measurement {
   lengthInNm: number;
   line: { x1: number, y1: number, x2: number, y2: number };
 }
+
+export type AIProvider = 'gemini' | 'openai' | 'claude' | 'openrouter' | 'custom' | 'ollama';
+
+export interface OllamaModelInfo {
+  name: string;
+  model: string;
+  size: number;
+  digest: string;
+  modified_at?: string;
+  details?: {
+    parent_model?: string;
+    format?: string;
+    family?: string;
+    families?: string[];
+    parameter_size?: string;
+    quantization_level?: string;
+  };
+  isVision?: boolean;
+}
+
+export interface AIServiceConfig {
+  provider: AIProvider;
+  // Custom API keys (user provided, never hardcoded)
+  geminiApiKey?: string;
+  geminiModel?: string;
+
+  openaiApiKey?: string;
+  openaiModel?: string;
+
+  claudeApiKey?: string;
+  claudeModel?: string;
+
+  openrouterApiKey?: string;
+  openrouterModel?: string;
+
+  customBaseUrl?: string;
+  customApiKey?: string;
+  customModel?: string;
+
+  // Local Ollama
+  ollamaHost: string;
+  ollamaVisionModel: string;
+  ollamaTextModel: string;
+}
+

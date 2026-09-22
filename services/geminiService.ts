@@ -1,28 +1,88 @@
-
-import { GoogleGenAI, Type, GenerateContentResponse, Chat } from "@google/genai";
+import { GoogleGenAI, Type, Chat } from "@google/genai";
 import { AnalysisParams, AnalysisReportData, ChatMessage, Scale, Measurement, LiteratureItem } from '../types';
+import { loadAIServiceConfig } from './aiConfig';
+import { 
+  ollamaGetAutoFillSuggestions, 
+  ollamaPerformFullAnalysis, 
+  ollamaPerformLiteratureReview, 
+  ollamaGenerateFinalSynthesis, 
+  ollamaProcessAIAction, 
+  ollamaRegenerateInterpretation, 
+  ollamaStreamChatResponse 
+} from './ollamaService';
+import {
+  externalGetAutoFillSuggestions,
+  externalPerformFullAnalysis,
+  externalPerformLiteratureReview,
+  externalGenerateFinalSynthesis,
+  externalProcessAIAction,
+  externalRegenerateInterpretation,
+  externalStreamChatResponse
+} from './externalAiService';
 
-const getAi = () => {
-  if (!process.env.API_KEY) {
-    throw new Error("API_KEY environment variable is not set.");
+const getAi = (userApiKey?: string) => {
+  const key = (userApiKey && userApiKey.trim()) || process.env.API_KEY;
+  if (!key) {
+    throw new Error("No Gemini API key found. Please open Settings in the top-right to enter your Gemini API key, or switch to OpenAI, Claude, OpenRouter, or Local Ollama.");
   }
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  return new GoogleGenAI({ apiKey: key });
 };
 
 const PRO_MODEL = 'gemini-3.1-pro-preview';
-const FLASH_MODEL = 'gemini-3.5-flash';
+const FLASH_MODEL = 'gemini-3.8-flash';
+
+// List of currently supported valid Gemini models (AI Studio standard models)
+export const SUPPORTED_GEMINI_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-flash-latest',
+  'gemini-3.1-pro-preview',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-2.5-pro'
+];
+
+export const normalizeGeminiModel = (model?: string, fallback: string = FLASH_MODEL): string => {
+  if (!model) return fallback;
+  const trimmed = model.trim();
+  // Map deprecated / invalid names to modern Google AI Studio defaults
+  if (
+    trimmed === 'gemini-pro' ||
+    trimmed === 'gemini-1.0-pro' ||
+    trimmed === 'gemini-1.5-flash' ||
+    trimmed === 'gemini-1.5-pro' ||
+    trimmed === 'gemini-2.0-flash' ||
+    trimmed === 'gemini-2.0-pro'
+  ) {
+    return fallback;
+  }
+  return trimmed;
+};
 
 const base64ToGenerativePart = (base64: string, mimeType: string) => {
+  const clean = base64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, '');
   return {
     inlineData: {
-      data: base64,
+      data: clean,
       mimeType,
     },
   };
 };
 
 export const getAutoFillSuggestions = async (imageBase64: string): Promise<Partial<AnalysisParams>> => {
-    const ai = getAi();
+    const config = loadAIServiceConfig();
+    if (config.provider === 'ollama') {
+      return ollamaGetAutoFillSuggestions(
+        config.ollamaHost, 
+        config.ollamaVisionModel || 'llama3.2-vision:11b', 
+        imageBase64
+      );
+    }
+
+    if (config.provider !== 'gemini') {
+      return externalGetAutoFillSuggestions(config, imageBase64);
+    }
+
+    const ai = getAi(config.geminiApiKey);
     const imagePart = base64ToGenerativePart(imageBase64, 'image/jpeg');
     const prompt = `Analyze this microscopy image and extract technical metadata (Microscopy type, Detector, Vacuum, Magnification). Return as JSON.`;
     
@@ -41,14 +101,44 @@ export const getAutoFillSuggestions = async (imageBase64: string): Promise<Parti
         required: ["microscopyType"]
     };
 
-    const response = await ai.models.generateContent({
-        model: FLASH_MODEL,
+    const targetModel = normalizeGeminiModel(config.geminiModel, FLASH_MODEL);
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: targetModel,
         contents: { parts: [imagePart, { text: prompt }] },
         config: {
-            responseMimeType: 'application/json',
-            responseSchema,
+          responseMimeType: 'application/json',
+          responseSchema,
         }
-    });
+      });
+    } catch (apiErr: any) {
+      const errStr = apiErr?.message || String(apiErr);
+      if (errStr.includes('404') || errStr.includes('NOT_FOUND') || errStr.includes('not found')) {
+        console.warn(`Model ${targetModel} returned 404, falling back to gemini-flash-latest...`);
+        try {
+          response = await ai.models.generateContent({
+            model: 'gemini-flash-latest',
+            contents: { parts: [imagePart, { text: prompt }] },
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema,
+            }
+          });
+        } catch {
+          response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: { parts: [imagePart, { text: prompt }] },
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema,
+            }
+          });
+        }
+      } else {
+        throw apiErr;
+      }
+    }
 
     return JSON.parse(response.text.trim()) as Partial<AnalysisParams>;
 };
@@ -62,7 +152,35 @@ export const performFullAnalysis = async (
     manualStats: { mean: number; stdDev: number; } | null,
     baselineImageBase64?: string | null
 ): Promise<AnalysisReportData> => {
-    const ai = getAi();
+    const config = loadAIServiceConfig();
+    if (config.provider === 'ollama') {
+      return ollamaPerformFullAnalysis(
+        config.ollamaHost,
+        config.ollamaVisionModel || 'llama3.2-vision:11b',
+        imageBase64,
+        params,
+        roi,
+        scale,
+        measurements,
+        manualStats,
+        baselineImageBase64
+      );
+    }
+
+    if (config.provider !== 'gemini') {
+      return externalPerformFullAnalysis(
+        config,
+        imageBase64,
+        params,
+        scale,
+        measurements,
+        manualStats,
+        baselineImageBase64
+      );
+    }
+
+    const ai = getAi(config.geminiApiKey);
+    const targetModel = config.geminiModel || FLASH_MODEL;
     const imagePart = base64ToGenerativePart(imageBase64, 'image/jpeg');
     
     const stageStr = params.imageStage === 'before'
@@ -155,7 +273,7 @@ export const performFullAnalysis = async (
             "semAnalysis", 
             "aggregation", 
             "contextualInterpretation", 
-            "comprehensiveInterpretation",
+            "comprehensiveInterpretation", 
             "comparisonAnalysis"
         ]
     };
@@ -167,20 +285,74 @@ export const performFullAnalysis = async (
     parts.push(imagePart);
     parts.push({ text: prompt });
 
-    const response = await ai.models.generateContent({
-        model: FLASH_MODEL,
+    const activeModel = normalizeGeminiModel(config.geminiModel, FLASH_MODEL);
+
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: activeModel,
         contents: { parts },
         config: {
-            responseMimeType: 'application/json',
-            responseSchema: analysisSchema
+          responseMimeType: 'application/json',
+          responseSchema: analysisSchema
         }
-    });
+      });
+    } catch (apiErr: any) {
+      const errStr = apiErr?.message || String(apiErr);
+      if (errStr.includes('404') || errStr.includes('NOT_FOUND') || errStr.includes('not found')) {
+        console.warn(`Model ${activeModel} produced 404 NOT_FOUND. Attempting fallback chain (gemini-3.8-flash -> gemini-flash-latest -> gemini-2.5-flash)...`);
+        
+        const candidateFallbacks = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'].filter(m => m !== activeModel);
+        let succeeded = false;
+
+        for (const fallbackModel of candidateFallbacks) {
+          try {
+            response = await ai.models.generateContent({
+              model: fallbackModel,
+              contents: { parts },
+              config: {
+                responseMimeType: 'application/json',
+                responseSchema: analysisSchema
+              }
+            });
+            succeeded = true;
+            break;
+          } catch {
+            // Continue to next fallback candidate
+          }
+        }
+
+        if (!succeeded) {
+          throw new Error(
+            `Gemini API returned 404 NOT_FOUND for model "${activeModel}". ` +
+            `This occurs when the API key's Google Cloud project does not have the "Generative Language API" enabled or the model is not accessible with that key. ` +
+            `Please check your model in Settings (top right) or verify your key at https://aistudio.google.com/app/apikey.`
+          );
+        }
+      } else {
+        throw apiErr;
+      }
+    }
 
     return JSON.parse(response.text.trim()) as AnalysisReportData;
 };
 
 export const performLiteratureReview = async (query: string, more = false): Promise<LiteratureItem[]> => {
-    const ai = getAi();
+    const config = loadAIServiceConfig();
+    if (config.provider === 'ollama') {
+      return ollamaPerformLiteratureReview(
+        config.ollamaHost,
+        config.ollamaTextModel || config.ollamaVisionModel || 'llama3.2-vision:11b',
+        query
+      );
+    }
+
+    if (config.provider !== 'gemini') {
+      return externalPerformLiteratureReview(config, query);
+    }
+
+    const ai = getAi(config.geminiApiKey);
+    const targetModel = normalizeGeminiModel(config.geminiModel, PRO_MODEL);
     const prompt = `Search for peer-reviewed papers for: ${query}. 
     
     CRITICAL QUALITY RULES:
@@ -190,32 +362,59 @@ export const performLiteratureReview = async (query: string, more = false): Prom
     
     Return JSON array.`;
 
-    const response = await ai.models.generateContent({
-        model: PRO_MODEL,
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: targetModel,
         contents: prompt,
         config: {
-            tools: [{ googleSearch: {} }],
-            responseMimeType: 'application/json',
-            responseSchema: {
-                type: Type.ARRAY,
-                items: {
-                    type: Type.OBJECT,
-                    properties: {
-                        title: { type: Type.STRING },
-                        authors: { type: Type.STRING },
-                        year: { type: Type.STRING },
-                        journal: { type: Type.STRING },
-                        keyFindings: { type: Type.STRING },
-                        comparison: { type: Type.STRING },
-                        url: { type: Type.STRING },
-                        doi: { type: Type.STRING },
-                        fullCitation: { type: Type.STRING }
-                    },
-                    required: ["title", "year", "url", "fullCitation", "doi"]
-                }
+          tools: [{ googleSearch: {} }],
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                authors: { type: Type.STRING },
+                year: { type: Type.STRING },
+                journal: { type: Type.STRING },
+                keyFindings: { type: Type.STRING },
+                comparison: { type: Type.STRING },
+                url: { type: Type.STRING },
+                doi: { type: Type.STRING },
+                fullCitation: { type: Type.STRING }
+              },
+              required: ["title", "year", "url", "fullCitation", "doi"]
             }
+          }
         }
-    });
+      });
+    } catch (e: any) {
+      const errStr = e?.message || String(e);
+      if (errStr.includes('404') || errStr.includes('NOT_FOUND') || errStr.includes('not found')) {
+        try {
+          response = await ai.models.generateContent({
+            model: 'gemini-3.8-flash',
+            contents: prompt,
+            config: {
+              tools: [{ googleSearch: {} }],
+              responseMimeType: 'application/json',
+            }
+          });
+        } catch {
+          response = await ai.models.generateContent({
+            model: 'gemini-flash-latest',
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+            }
+          });
+        }
+      } else {
+        throw e;
+      }
+    }
 
     try {
         return JSON.parse(response.text.trim()) as LiteratureItem[];
@@ -230,7 +429,23 @@ export const generateFinalSynthesis = async (
     params: AnalysisParams, 
     literature: LiteratureItem[]
 ): Promise<string> => {
-    const ai = getAi();
+    const config = loadAIServiceConfig();
+    if (config.provider === 'ollama') {
+      return ollamaGenerateFinalSynthesis(
+        config.ollamaHost,
+        config.ollamaTextModel || config.ollamaVisionModel || 'llama3.2-vision:11b',
+        report,
+        params,
+        literature
+      );
+    }
+
+    if (config.provider !== 'gemini') {
+      return externalGenerateFinalSynthesis(config, report, params, literature);
+    }
+
+    const ai = getAi(config.geminiApiKey);
+    const targetModel = normalizeGeminiModel(config.geminiModel, PRO_MODEL);
     const stageStr = params.imageStage === 'before'
       ? `Before Use (Pristine material, e.g., before application/adsorption/photocatalysis). Details: ${params.imageStageDetails || 'None'}`
       : params.imageStage === 'after'
@@ -264,26 +479,64 @@ export const generateFinalSynthesis = async (
       Return text only.
     `;
 
-    const response = await ai.models.generateContent({
-        model: PRO_MODEL,
+    try {
+      const response = await ai.models.generateContent({
+        model: targetModel,
         contents: prompt
-    });
-
-    return response.text;
+      });
+      return response.text || '';
+    } catch (err: any) {
+      const errStr = err?.message || String(err);
+      if (errStr.includes('404') || errStr.includes('NOT_FOUND') || errStr.includes('not found')) {
+        const fallbackRes = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: prompt
+        });
+        return fallbackRes.text || '';
+      }
+      throw err;
+    }
 };
 
 export const processAIAction = async (action: 'explain' | 'expand' | 'summarize', context: string) => {
-    const ai = getAi();
+    const config = loadAIServiceConfig();
+    if (config.provider === 'ollama') {
+      return ollamaProcessAIAction(
+        config.ollamaHost,
+        config.ollamaTextModel || config.ollamaVisionModel || 'llama3.2-vision:11b',
+        action,
+        context
+      );
+    }
+
+    if (config.provider !== 'gemini') {
+      return externalProcessAIAction(config, action, context);
+    }
+
+    const ai = getAi(config.geminiApiKey);
+    const targetModel = normalizeGeminiModel(config.geminiModel, FLASH_MODEL);
     let prompt = "";
     if (action === 'explain') prompt = `Explain the educational principles of this microscopy data for a student: ${context}`;
     if (action === 'expand') prompt = `Expand this into a 1500-word comprehensive manuscript discussion: ${context}`;
     if (action === 'summarize') prompt = `Summarize into a concise abstract: ${context}`;
 
-    const response = await ai.models.generateContent({
-        model: FLASH_MODEL,
+    try {
+      const response = await ai.models.generateContent({
+        model: targetModel,
         contents: prompt
-    });
-    return response.text;
+      });
+      return response.text || '';
+    } catch (err: any) {
+      const errStr = err?.message || String(err);
+      if (errStr.includes('404') || errStr.includes('NOT_FOUND') || errStr.includes('not found')) {
+        const fallbackRes = await ai.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: prompt
+        });
+        return fallbackRes.text || '';
+      }
+      throw err;
+    }
 };
 
 export const regenerateInterpretation = async (
@@ -292,19 +545,46 @@ export const regenerateInterpretation = async (
     params: AnalysisParams,
     tone: string
 ): Promise<string> => {
-    const ai = getAi();
-    const prompt = `Rewrite this interpretation for publication in "${tone}" style. Ensure it is extensive and آموزشی. Original: "${baseInterpretation}"`;
-    const response = await ai.models.generateContent({ model: FLASH_MODEL, contents: prompt });
-    return response.text;
+    const config = loadAIServiceConfig();
+    if (config.provider === 'ollama') {
+      return ollamaRegenerateInterpretation(
+        config.ollamaHost,
+        config.ollamaTextModel || config.ollamaVisionModel || 'llama3.2-vision:11b',
+        baseInterpretation,
+        report,
+        params,
+        tone
+      );
+    }
+
+    if (config.provider !== 'gemini') {
+      return externalRegenerateInterpretation(config, baseInterpretation, report, params, tone);
+    }
+
+    const ai = getAi(config.geminiApiKey);
+    const targetModel = normalizeGeminiModel(config.geminiModel, FLASH_MODEL);
+    const prompt = `Rewrite this interpretation for publication in "${tone}" style. Ensure it is extensive and educational. Original: "${baseInterpretation}"`;
+    try {
+      const response = await ai.models.generateContent({ model: targetModel, contents: prompt });
+      return response.text || '';
+    } catch (err: any) {
+      const errStr = err?.message || String(err);
+      if (errStr.includes('404') || errStr.includes('NOT_FOUND') || errStr.includes('not found')) {
+        const fallbackRes = await ai.models.generateContent({ model: 'gemini-3.8-flash', contents: prompt });
+        return fallbackRes.text || '';
+      }
+      throw err;
+    }
 };
 
 let chatInstance: Chat | null = null;
 export const resetChat = () => { chatInstance = null; }
-const getChatInstance = (analysisContext: string): Chat => {
+const getChatInstance = (analysisContext: string, apiKey?: string, modelName?: string): Chat => {
     if (!chatInstance) {
-        const ai = getAi();
+        const ai = getAi(apiKey);
+        const resolvedModel = normalizeGeminiModel(modelName, FLASH_MODEL);
         chatInstance = ai.chats.create({
-            model: PRO_MODEL,
+            model: resolvedModel,
             config: {
                 systemInstruction: `You are a specialist in material science. Help users link their image findings to literature and metadata. Use context: ${analysisContext}.`,
                 tools: [{ googleSearch: {} }]
@@ -315,6 +595,20 @@ const getChatInstance = (analysisContext: string): Chat => {
 };
 
 export const streamChatResponse = async (history: ChatMessage[], context: string) => {
-    const chat = getChatInstance(context);
+    const config = loadAIServiceConfig();
+    if (config.provider === 'ollama') {
+      return ollamaStreamChatResponse(
+        config.ollamaHost,
+        config.ollamaVisionModel || config.ollamaTextModel || 'llama3.2-vision:11b',
+        history,
+        context
+      );
+    }
+
+    if (config.provider !== 'gemini') {
+      return externalStreamChatResponse(config, history, context);
+    }
+
+    const chat = getChatInstance(context, config.geminiApiKey, config.geminiModel);
     return chat.sendMessageStream({ message: history[history.length - 1].content });
 };

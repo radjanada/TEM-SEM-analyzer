@@ -1,7 +1,8 @@
 
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
-import { AnalysisParams, AnalysisReportData, ChatMessage, ImageFile, Scale, Measurement, LiteratureItem } from './types';
+import { AnalysisParams, AnalysisReportData, ChatMessage, ImageFile, Scale, Measurement, LiteratureItem, AIServiceConfig } from './types';
 import { getAutoFillSuggestions, performFullAnalysis, resetChat, performLiteratureReview, processAIAction } from './services/geminiService';
+import { loadAIServiceConfig } from './services/aiConfig';
 import Header from './components/Header';
 import ImageUploader from './components/ImageUploader';
 import AnalysisForm from './components/AnalysisForm';
@@ -10,11 +11,14 @@ import AnalysisReport from './components/AnalysisReport';
 import ChatAssistant from './components/ChatAssistant';
 import Loader from './components/Loader';
 import MeasurementPanel from './components/MeasurementPanel';
-import { RobotIcon, BeakerIcon, ChartBarIcon, AcademicCapIcon } from './components/icons';
+import OllamaSettingsModal from './components/OllamaSettingsModal';
+import { RobotIcon, BeakerIcon, ChartBarIcon, AcademicCapIcon, CogIcon, XMarkIcon } from './components/icons';
 
 export type DrawingMode = 'roi' | 'scale' | 'measure' | 'pan';
 
 export default function App() {
+  const [aiConfig, setAiConfig] = useState<AIServiceConfig>(loadAIServiceConfig);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [image, setImage] = useState<ImageFile | null>(null);
   const [baselineImage, setBaselineImage] = useState<ImageFile | null>(null);
   const [analysisParams, setAnalysisParams] = useState<AnalysisParams>({
@@ -61,6 +65,14 @@ export default function App() {
     const stdDev = n > 1 ? Math.sqrt(data.map(x => Math.pow(x - mean, 2)).reduce((a, b) => a + b, 0) / (n - 1)) : 0;
     return { mean, stdDev };
   }, [measurements]);
+
+  useEffect(() => {
+    const handleConfigChange = (e: CustomEvent<AIServiceConfig>) => {
+      setAiConfig(e.detail);
+    };
+    window.addEventListener('ai-config-changed' as any, handleConfigChange);
+    return () => window.removeEventListener('ai-config-changed' as any, handleConfigChange);
+  }, []);
 
   useEffect(() => {
     const handleUndo = (e: KeyboardEvent) => {
@@ -228,13 +240,52 @@ export default function App() {
     }
   };
 
+  const getEngineLoaderMessage = () => {
+    switch (aiConfig.provider) {
+      case 'openai': return `Analyzing geometry and surface features with OpenAI (${aiConfig.openaiModel || 'gpt-4o'})...`;
+      case 'claude': return `Analyzing geometry and surface features with Anthropic Claude (${aiConfig.claudeModel || 'Sonnet'})...`;
+      case 'openrouter': return `Analyzing geometry and surface features with OpenRouter (${aiConfig.openrouterModel || 'AI'})...`;
+      case 'custom': return `Analyzing geometry and surface features with Custom Provider (${aiConfig.customModel || 'v1'})...`;
+      case 'ollama': return `Analyzing geometry and surface features with Local Ollama (${aiConfig.ollamaVisionModel || 'Local Vision'})...`;
+      case 'gemini':
+      default: return `Analyzing geometry and surface features with Google Gemini (${aiConfig.geminiModel || 'gemini-2.5-flash'})...`;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 font-sans p-4 sm:p-6 lg:p-8">
-      {isAnalyzing && <Loader message="Analyzing geometry, topology, and surface features via image recognition..." />}
+      {isAnalyzing && (
+        <Loader message={getEngineLoaderMessage()} />
+      )}
       {isReviewing && <Loader message="Cross-referencing global publications for grounded characterization data..." />}
       
       <div className="max-w-8xl mx-auto space-y-8">
-        <Header />
+        <Header aiConfig={aiConfig} onOpenSettings={() => setIsSettingsOpen(true)} />
+
+        {error && (
+          <div className="bg-red-950/70 border border-red-800 text-red-200 p-4 rounded-xl flex items-center justify-between gap-4 shadow-lg">
+            <div className="flex items-center gap-3">
+              <span className="text-red-400 text-xl font-bold">⚠️</span>
+              <span className="text-sm">{error}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsSettingsOpen(true)}
+                className="px-3 py-1.5 bg-red-900/60 hover:bg-red-850 border border-red-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+              >
+                <CogIcon className="w-3.5 h-3.5" />
+                Change AI Engine / Keys
+              </button>
+              <button
+                onClick={() => setError(null)}
+                className="p-1.5 text-red-400 hover:text-white rounded-lg hover:bg-red-900/40"
+                title="Dismiss"
+              >
+                <XMarkIcon className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {!image && <ImageUploader onImageUpload={handleImageUpload} />}
 
@@ -337,6 +388,12 @@ export default function App() {
           </div>
         )}
       </div>
+
+      <OllamaSettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onConfigUpdated={(cfg) => setAiConfig(cfg)}
+      />
     </div>
   );
 }
