@@ -74,6 +74,8 @@ Run the following command to download all necessary libraries:
 
 ```bash
 npm install
+npm install-scripts approve --all
+
 ```
 
 *(This takes about 30–60 seconds depending on your internet connection.)*
